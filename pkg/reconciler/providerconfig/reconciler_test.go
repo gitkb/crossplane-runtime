@@ -345,3 +345,45 @@ func TestReconciler(t *testing.T) {
 		})
 	}
 }
+
+// Namespaced configs must account only for local usages; cluster-scoped configs
+// must still see usages from every namespace.
+func TestUsageListScope(t *testing.T) {
+	for _, namespace := range []string{"", "preview-a"} {
+		t.Run("namespace="+namespace, func(t *testing.T) {
+			listed := false
+			m := &fake.Manager{
+				Client: &test.MockClient{
+					MockGet: test.NewMockGetFn(nil, func(obj client.Object) error {
+						obj.SetName("shared-name")
+						obj.SetNamespace(namespace)
+						return nil
+					}),
+					MockList: func(_ context.Context, _ client.ObjectList, opts ...client.ListOption) error {
+						listed = true
+						o := (&client.ListOptions{}).ApplyOptions(opts)
+						if o.Namespace != namespace {
+							t.Errorf("usage namespace = %q, want %q", o.Namespace, namespace)
+						}
+
+						return nil
+					},
+					MockUpdate:       test.NewMockUpdateFn(nil),
+					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+				},
+				Scheme: fake.SchemeWith(&fake.ProviderConfig{}, &fake.ProviderConfigUsage{}, &ProviderConfigUsageList{}),
+			}
+			r := NewReconciler(m, resource.ProviderConfigKinds{
+				Config:    fake.GVK(&fake.ProviderConfig{}),
+				Usage:     fake.GVK(&fake.ProviderConfigUsage{}),
+				UsageList: fake.GVK(&ProviderConfigUsageList{}),
+			})
+			if _, err := r.Reconcile(context.Background(), reconcile.Request{}); err != nil {
+				t.Fatal(err)
+			}
+			if !listed {
+				t.Fatal("usages were not listed")
+			}
+		})
+	}
+}
